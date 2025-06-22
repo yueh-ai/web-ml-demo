@@ -1,0 +1,77 @@
+{
+  "model": "model.onnx",
+  "version": "1.0.0",
+  "created": "2025-06-22 10:23:44",
+  "input_names": [
+    "float_input"
+  ],
+  "output_name": "variable",
+  "feature_order": [
+    "MedInc",
+    "HouseAge",
+    "AveRooms",
+    "AveBedrms",
+    "Population",
+    "AveOccup",
+    "Latitude",
+    "Longitude"
+  ],
+  "feature_ranges": {
+    "MedInc": {
+      "min": 0.5,
+      "max": 15.0,
+      "step": 0.5,
+      "default": 3.0
+    },
+    "HouseAge": {
+      "min": 1,
+      "max": 52,
+      "step": 1,
+      "default": 25
+    },
+    "AveRooms": {
+      "min": 1,
+      "max": 10,
+      "step": 0.5,
+      "default": 5
+    },
+    "AveBedrms": {
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "default": 1.0
+    },
+    "Population": {
+      "min": 100,
+      "max": 10000,
+      "step": 100,
+      "default": 3000
+    },
+    "AveOccup": {
+      "min": 1,
+      "max": 6,
+      "step": 0.1,
+      "default": 3.0
+    },
+    "Latitude": {
+      "min": 32,
+      "max": 42,
+      "step": 0.1,
+      "default": 34.0
+    },
+    "Longitude": {
+      "min": -125,
+      "max": -114,
+      "step": 0.1,
+      "default": -118.0
+    }
+  },
+  "model_info": {
+    "type": "XGBoost Regressor",
+    "task": "California House Price Prediction",
+    "n_estimators": 50,
+    "max_depth": 4,
+    "training_samples": 8000,
+    "r2_score": 0.807
+  }
+}
