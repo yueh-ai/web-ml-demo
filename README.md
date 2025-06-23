@@ -15,6 +15,7 @@ A TypeScript-powered demo showing how to run XGBoost models entirely in the brow
 ## Quick Start
 
 ### 1. Build the Model (if needed)
+
 ```bash
 cd model-dev
 uv sync
@@ -22,19 +23,22 @@ uv run python build_model.py
 ```
 
 This creates:
+
 - `web/public/models/xgb_california_housing.onnx` - The ONNX model
 - `web/public/models/xgb_california_housing_metadata.json` - Model metadata
 
 ### 2. Run the Web App
+
 ```bash
 cd web
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173 in your browser (Vite default port).
+Open http://localhost:3001/ in your browser (Vite default port).
 
 ### Build for Production
+
 ```bash
 npm run build
 npm run preview  # Test the production build
@@ -64,7 +68,7 @@ model-dev/                    # Python model training
 ├── build_model.py           # Trains and exports to ONNX
 └── pyproject.toml           # UV dependencies
 
-web/                         # React TypeScript application  
+web/                         # React TypeScript application
 ├── public/
 │   └── models/
 │       ├── xgb_california_housing.onnx
@@ -91,6 +95,7 @@ web/                         # React TypeScript application
 ## TypeScript Benefits
 
 The project has been migrated to TypeScript for:
+
 - **Type-safe worker communication**: Prevents runtime errors from message mismatches
 - **Better IDE support**: Auto-completion and inline documentation
 - **Compile-time error detection**: Catch issues before runtime
