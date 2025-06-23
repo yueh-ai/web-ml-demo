@@ -178,12 +178,12 @@ graph LR
     A[Package Managers] --> B[npm]
     A --> C[UV/pip]
     
-    D[Type Definitions] --> E[@types/react]
-    D --> F[@types/react-dom]
+    D[Type Definitions] --> E["@types/react"]
+    D --> F["@types/react-dom"]
     
     G[Build Tools] --> H[Vite]
     G --> I[TypeScript]
-    G --> J[@vitejs/plugin-react]
+    G --> J["@vitejs/plugin-react"]
     
     K[Linting] --> L[ESLint]
     K --> M[TypeScript ESLint]
