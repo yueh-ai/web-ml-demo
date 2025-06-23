@@ -1,1057 +1,1763 @@
 # Browser-Based Machine Learning Implementation Guide
 
-This guide provides comprehensive instructions for implementing client-side machine learning in web applications. Based on a production-ready demo that runs XGBoost models entirely in the browser using ONNX Runtime Web.
+This guide explains how to integrate client-side machine learning capabilities into your existing web application, regardless of your tech stack. The core concept is running ML models directly in the browser using ONNX Runtime Web, eliminating the need for server-side inference.
 
 ## Table of Contents
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Model Development](#model-development)
-4. [Web Implementation](#web-implementation)
-5. [Integration Steps](#integration-steps)
-6. [Performance Optimization](#performance-optimization)
-7. [Troubleshooting](#troubleshooting)
-8. [Deployment](#deployment)
 
-## Overview
+1. [Core Concepts](#core-concepts)
+2. [Architecture Overview](#architecture-overview)
+3. [Model Preparation](#model-preparation)
+4. [Core Implementation](#core-implementation)
+5. [Framework Integration](#framework-integration)
+6. [Build Tool Configuration](#build-tool-configuration)
+7. [State Management Integration](#state-management-integration)
+8. [Testing & CI/CD](#testing--cicd)
+9. [Performance & Optimization](#performance--optimization)
+10. [Production Considerations](#production-considerations)
 
-This implementation enables running machine learning models directly in web browsers without server-side inference. Key benefits:
-- **Zero latency**: No network calls for predictions
-- **Privacy**: Data never leaves the user's device
-- **Scalability**: No server infrastructure needed for inference
-- **Offline capability**: Works without internet connection
+## Core Concepts
 
-### Technology Stack
-- **Model Training**: Python, XGBoost, scikit-learn
-- **Model Format**: ONNX (Open Neural Network Exchange)
-- **Frontend**: React, Material-UI
-- **ML Runtime**: ONNX Runtime Web (WebAssembly)
-- **Build Tool**: Vite
+### What You're Building
 
-## Architecture
+A feature that runs machine learning predictions entirely in the user's browser:
+
+- **No API calls** for predictions
+- **Zero latency** inference
+- **Complete privacy** - data never leaves the device
+- **Offline capable** once model is loaded
+- **Infinitely scalable** - no server costs
+
+### Key Technologies
+
+- **ONNX**: Open standard for ML model representation
+- **ONNX Runtime Web**: JavaScript library for running ONNX models
+- **Web Workers**: Background threads for non-blocking inference
+- **WebAssembly**: High-performance execution environment
+
+## Architecture Overview
+
+The implementation consists of three main components:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Model Development                     │
-│  Python Script → Train Model → Export ONNX → Metadata   │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                    Web Application                       │
-│  ┌─────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │ React App   │ ←→ │ Web Worker   │ ←→ │ ONNX      │  │
-│  │ (UI Thread) │    │ (Background) │    │ Runtime   │  │
-│  └─────────────┘    └──────────────┘    └───────────┘  │
+│                  Your Existing Application               │
+│                                                          │
+│  ┌──────────────┐     ┌─────────────┐     ┌─────────┐  │
+│  │ UI Component │ <-> │ ML Service  │ <-> │ Worker  │  │
+│  │ (any framework)    │ (adapter)   │     │ Thread  │  │
+│  └──────────────┘     └─────────────┘     └─────────┘  │
+│                                                  │        │
+│                                                  ▼        │
+│                                            ┌─────────┐   │
+│                                            │ ONNX    │   │
+│                                            │ Runtime │   │
+│                                            └─────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Model Development
+## Model Preparation
 
-### 1. Setup Python Environment
+### Step 1: Export Your Model to ONNX
 
-Create a `pyproject.toml` for dependency management:
+The first step is converting your trained model to ONNX format. Here's how for common frameworks:
 
-```toml
-[project]
-name = "model-dev"
-version = "0.1.0"
-description = "ML model development for browser deployment"
-requires-python = ">=3.11"
-dependencies = [
-    "xgboost>=2.1.3",
-    "scikit-learn>=1.5.2",
-    "skl2onnx>=1.18.0",
-    "onnxmltools>=1.13.0",
-    "onnxruntime>=1.20.1",
-    "numpy>=1.26.4",
-    "pandas>=2.2.3",
-]
-```
-
-### 2. Train and Export Model
-
-Complete model training and export script (`build_model.py`):
+#### Python (scikit-learn, XGBoost, LightGBM)
 
 ```python
+# model_export.py
 import json
 import numpy as np
 from pathlib import Path
-from sklearn.datasets import fetch_california_housing
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score
-import xgboost as xgb
-from skl2onnx import to_onnx
-from onnxmltools.utils import save_model
-import onnxruntime as ort
 
-def train_model():
-    """Train XGBoost model on California Housing dataset"""
-    print("Loading California Housing dataset...")
-    data = fetch_california_housing()
-    
-    # Use subset for faster training (adjust as needed)
-    X = data.data[:10000]
-    y = data.target[:10000]
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    # Train XGBoost model
-    print("Training XGBoost model...")
-    model = xgb.XGBRegressor(
-        n_estimators=100,
-        max_depth=5,
-        learning_rate=0.1,
-        random_state=42
-    )
-    model.fit(X_train, y_train)
-    
-    # Evaluate model
-    y_pred = model.predict(X_test)
-    r2 = r2_score(y_test, y_pred)
-    print(f"Model R² score: {r2:.3f}")
-    
-    return model, data, r2
+def export_sklearn_model(model, sample_input, output_dir):
+    """Export scikit-learn compatible model to ONNX"""
+    from skl2onnx import to_onnx
+    from skl2onnx.common.data_types import FloatTensorType
 
-def export_to_onnx(model, sample_input, output_path):
-    """Convert sklearn model to ONNX format"""
-    print("Converting to ONNX format...")
-    
     # Define input type
     initial_type = [('float_input', FloatTensorType([None, sample_input.shape[1]]))]
-    
+
     # Convert to ONNX
     onnx_model = to_onnx(
-        model, 
+        model,
         initial_types=initial_type,
-        target_opset=12,  # Compatible with most browsers
+        target_opset=12,  # Use opset 12 for browser compatibility
         options={'zipmap': False}  # Return array instead of dict
     )
-    
+
     # Save model
-    save_model(onnx_model, output_path)
-    print(f"Model saved to {output_path}")
-    
-    # Verify the model
-    session = ort.InferenceSession(str(output_path))
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
-    
-    return input_name, output_name
+    output_path = Path(output_dir) / "model.onnx"
+    with open(output_path, 'wb') as f:
+        f.write(onnx_model.SerializeToString())
 
-def create_metadata(data, r2_score, input_name, output_name, output_dir):
-    """Create metadata file for frontend"""
-    feature_names = data.feature_names
-    
-    # Calculate feature statistics for UI sliders
-    feature_stats = {}
-    for i, name in enumerate(feature_names):
-        values = data.data[:, i]
-        feature_stats[name] = {
-            "min": float(np.min(values)),
-            "max": float(np.max(values)),
-            "mean": float(np.mean(values)),
-            "std": float(np.std(values))
-        }
-    
-    metadata = {
-        "model": {
-            "name": "California Housing Price Predictor",
-            "type": "xgboost",
-            "task": "regression",
-            "performance": {
-                "r2_score": r2_score,
-                "metric": "R²"
-            }
-        },
-        "inputs": {
-            "features": feature_names,
-            "tensorName": input_name,
-            "shape": [-1, len(feature_names)]
-        },
-        "outputs": {
-            "tensorName": output_name,
-            "type": "price",
-            "unit": "$1000s"
-        },
-        "featureStats": feature_stats
-    }
-    
-    # Save metadata
-    metadata_path = output_dir / "model-package.json"
-    with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print(f"Metadata saved to {metadata_path}")
+    return onnx_model
 
-def main():
-    # Setup paths
-    output_dir = Path("../web/public")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Train model
-    model, data, r2 = train_model()
-    
-    # Export to ONNX
-    sample_input = data.data[:1]  # Single sample for type inference
-    model_path = output_dir / "model.onnx"
-    input_name, output_name = export_to_onnx(model, sample_input, model_path)
-    
-    # Create metadata
-    create_metadata(data, r2, input_name, output_name, output_dir)
-    
-    # Print model size
-    model_size = model_path.stat().st_size / 1024
-    print(f"\nModel size: {model_size:.1f} KB")
-    print("Build complete!")
+def export_tensorflow_model(model, sample_input, output_dir):
+    """Export TensorFlow/Keras model to ONNX"""
+    import tf2onnx
 
-if __name__ == "__main__":
-    main()
+    output_path = Path(output_dir) / "model.onnx"
+    model_proto, _ = tf2onnx.convert.from_keras(
+        model,
+        output_path=str(output_path),
+        opset=12
+    )
+
+    return model_proto
+
+def export_pytorch_model(model, sample_input, output_dir):
+    """Export PyTorch model to ONNX"""
+    import torch
+
+    model.eval()
+    output_path = Path(output_dir) / "model.onnx"
+
+    torch.onnx.export(
+        model,
+        sample_input,
+        str(output_path),
+        export_params=True,
+        opset_version=12,
+        do_constant_folding=True,
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes={'input': {0: 'batch_size'}}
+    )
 ```
 
-### 3. Model Optimization Tips
+#### Generate Model Metadata
 
-For smaller model sizes:
+Create a metadata file that describes your model's inputs and outputs:
 
 ```python
-# Option 1: Quantization
-from onnxruntime.quantization import quantize_dynamic
+def create_model_metadata(model_info, output_dir):
+    """Create metadata file for the frontend"""
+    metadata = {
+        "modelInfo": {
+            "name": model_info["name"],
+            "version": model_info["version"],
+            "type": model_info["type"],  # "regression", "classification", etc.
+        },
+        "inputs": {
+            "features": model_info["feature_names"],
+            "shape": model_info["input_shape"],
+            "tensorName": model_info["input_tensor_name"],
+        },
+        "outputs": {
+            "tensorName": model_info["output_tensor_name"],
+            "shape": model_info["output_shape"],
+            "type": model_info["output_type"],  # "probability", "value", etc.
+        },
+        # Optional: Include normalization parameters if needed
+        "preprocessing": {
+            "normalization": model_info.get("normalization", None)
+        }
+    }
 
-quantized_model_path = "model_quantized.onnx"
-quantize_dynamic(
-    model_input="model.onnx",
-    model_output=quantized_model_path,
-    weight_type=QuantType.QUInt8
-)
-
-# Option 2: Use lighter models
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-
-# Linear model (smallest)
-model = LinearRegression()
-
-# Or Random Forest with limited trees
-model = RandomForestRegressor(n_estimators=10, max_depth=3)
+    output_path = Path(output_dir) / "model-metadata.json"
+    with open(output_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
 ```
 
-## Web Implementation
+### Step 2: Optimize Model Size (Optional)
 
-### 1. Project Setup
+For web deployment, smaller models load faster:
 
-Initialize React project with Vite:
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+def optimize_model_for_web(onnx_model_path, output_path):
+    """Quantize model to reduce size"""
+    quantize_dynamic(
+        model_input=onnx_model_path,
+        model_output=output_path,
+        weight_type=QuantType.QUInt8,
+        optimize_model=True
+    )
+```
+
+## Core Implementation
+
+### Step 1: Install ONNX Runtime Web
 
 ```bash
-npm create vite@latest web -- --template react
-cd web
-npm install @mui/material @emotion/react @emotion/styled onnxruntime-web
+# npm
+npm install onnxruntime-web
+
+# yarn
+yarn add onnxruntime-web
+
+# pnpm
+pnpm add onnxruntime-web
+
+# For TypeScript support
+npm install --save-dev typescript @types/react @types/react-dom
 ```
 
-### 2. Configure Vite
+### Step 2: Define TypeScript Types (Recommended)
 
-Create `vite.config.js`:
+For better type safety and clearer contracts between main thread and worker:
+
+```typescript
+// types/worker-messages.ts
+// Model metadata types
+export interface ModelMetadata {
+  model_info: {
+    type: string;
+    r2_score: number;
+    training_samples: number;
+  };
+  feature_ranges: Record<string, FeatureRange>;
+}
+
+export interface FeatureRange {
+  min: number;
+  max: number;
+  default: number;
+  step: number;
+}
+
+export type FeatureData = Record<string, number>;
+
+// Worker message types
+export interface LoadModelMessage {
+  event: 'load';
+  meta: ModelMetadata;
+}
+
+export interface PredictMessage {
+  event: 'predict';
+  features: FeatureData;
+}
+
+export type WorkerIncomingMessage = LoadModelMessage | PredictMessage;
+
+// Messages from worker to main thread
+export interface ModelLoadedMessage {
+  event: 'model_loaded';
+  success: boolean;
+  error?: string;
+}
+
+export interface PredictionMessage {
+  event: 'prediction';
+  success: boolean;
+  value?: number;
+  error?: string;
+}
+
+export type WorkerOutgoingMessage = ModelLoadedMessage | PredictionMessage;
+```
+
+### Step 3: Create the Web Worker
+
+TypeScript version (recommended):
+
+```typescript
+// workers/predict.worker.ts
+import * as ort from 'onnxruntime-web';
+import type { WorkerIncomingMessage, WorkerOutgoingMessage, ModelMetadata, FeatureData } from '../types/worker-messages';
+
+// Configure ONNX Runtime
+ort.env.wasm.numThreads = 1;
+ort.env.wasm.simd = true;
+
+let session: ort.InferenceSession | null = null;
+let meta: ModelMetadata | null = null;
+
+async function loadModel(metadata: ModelMetadata) {
+  try {
+    meta = metadata;
+    
+    // Create inference session
+    session = await ort.InferenceSession.create('/models/xgb_california_housing.onnx', {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all'
+    });
+
+    console.log('Model loaded successfully');
+    
+    const message: WorkerOutgoingMessage = {
+      event: 'model_loaded',
+      success: true
+    };
+    self.postMessage(message);
+  } catch (error) {
+    console.error('Failed to load model:', error);
+    const message: WorkerOutgoingMessage = {
+      event: 'model_loaded',
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    self.postMessage(message);
+  }
+}
+
+async function predict(features: FeatureData) {
+  if (!session || !meta) {
+    const message: WorkerOutgoingMessage = {
+      event: 'prediction',
+      success: false,
+      error: 'Model not loaded'
+    };
+    self.postMessage(message);
+    return;
+  }
+
+  try {
+    // Extract feature values in the correct order
+    const featureNames = Object.keys(meta.feature_ranges);
+    const inputArray = featureNames.map(name => features[name]);
+    
+    // Create input tensor
+    const inputTensor = new ort.Tensor('float32', Float32Array.from(inputArray), [1, inputArray.length]);
+    
+    // Run inference
+    const feeds = { 'input': inputTensor };
+    const results = await session.run(feeds);
+    
+    // Extract prediction
+    const outputTensor = results['variable'];
+    const prediction = outputTensor.data[0] as number;
+    
+    const message: WorkerOutgoingMessage = {
+      event: 'prediction',
+      success: true,
+      value: prediction
+    };
+    self.postMessage(message);
+  } catch (error) {
+    console.error('Prediction failed:', error);
+    const message: WorkerOutgoingMessage = {
+      event: 'prediction',
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    self.postMessage(message);
+  }
+}
+
+// Handle messages from main thread
+self.onmessage = async ({ data }: MessageEvent<WorkerIncomingMessage>) => {
+  switch (data.event) {
+    case 'load':
+      await loadModel(data.meta);
+      break;
+    case 'predict':
+      await predict(data.features);
+      break;
+  }
+};
+```
+
+JavaScript version:
 
 ```javascript
+// ml-worker.js
+import * as ort from "onnxruntime-web";
+
+// Configure ONNX Runtime
+ort.env.wasm.wasmPaths = "/"; // Adjust based on your setup
+
+class MLWorker {
+  constructor() {
+    this.session = null;
+    this.metadata = null;
+  }
+
+  async loadModel(modelUrl, metadataUrl) {
+    try {
+      // Load metadata
+      const metadataResponse = await fetch(metadataUrl);
+      this.metadata = await metadataResponse.json();
+
+      // Create inference session
+      this.session = await ort.InferenceSession.create(modelUrl, {
+        executionProviders: ["wasm"],
+        graphOptimizationLevel: "all",
+      });
+
+      return { success: true, metadata: this.metadata };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async predict(inputData) {
+    if (!this.session) {
+      throw new Error("Model not loaded");
+    }
+
+    try {
+      // Create input tensor
+      const inputTensor = new ort.Tensor(
+        "float32",
+        new Float32Array(inputData),
+        [1, inputData.length]
+      );
+
+      // Run inference
+      const feeds = { [this.metadata.inputs.tensorName]: inputTensor };
+      const results = await this.session.run(feeds);
+
+      // Extract output
+      const output = results[this.metadata.outputs.tensorName];
+      return Array.from(output.data);
+    } catch (error) {
+      throw new Error(`Prediction failed: ${error.message}`);
+    }
+  }
+}
+
+// Worker message handler
+const worker = new MLWorker();
+
+self.addEventListener("message", async (event) => {
+  const { type, id, payload } = event.data;
+
+  try {
+    let result;
+
+    switch (type) {
+      case "LOAD_MODEL":
+        result = await worker.loadModel(payload.modelUrl, payload.metadataUrl);
+        break;
+
+      case "PREDICT":
+        result = await worker.predict(payload.inputData);
+        break;
+
+      default:
+        throw new Error(`Unknown message type: ${type}`);
+    }
+
+    self.postMessage({ type: "SUCCESS", id, result });
+  } catch (error) {
+    self.postMessage({
+      type: "ERROR",
+      id,
+      error: error.message,
+    });
+  }
+});
+```
+
+### Step 4: Create React Hooks for Model Management
+
+TypeScript version (recommended):
+
+```typescript
+// hooks/useModelLoader.ts
+import { useEffect, useState, useRef } from 'react';
+import type { ModelMetadata, WorkerOutgoingMessage } from '../types/worker-messages';
+
+interface UseModelLoaderReturn {
+  meta: ModelMetadata | null;
+  ready: boolean;
+  loading: boolean;
+  error: string | null;
+  worker: Worker | null;
+}
+
+export function useModelLoader(): UseModelLoaderReturn {
+  const [meta, setMeta] = useState<ModelMetadata | null>(null);
+  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    async function initModel() {
+      try {
+        // Fetch metadata
+        const response = await fetch('/models/xgb_california_housing_metadata.json');
+        if (!response.ok) {
+          throw new Error('Failed to load model metadata');
+        }
+        
+        const metadata = await response.json() as ModelMetadata;
+        setMeta(metadata);
+        
+        // Import worker with Vite's ?worker syntax
+        const PredictWorker = await import('../workers/predict.worker.ts?worker');
+        const worker = new PredictWorker.default();
+        workerRef.current = worker;
+        
+        // Setup message handler
+        const handleMessage = ({ data }: MessageEvent<WorkerOutgoingMessage>) => {
+          if (data.event === 'model_loaded') {
+            if (data.success) {
+              setReady(true);
+              setLoading(false);
+            } else {
+              setError(data.error || 'Failed to load model');
+              setLoading(false);
+            }
+          }
+        };
+        
+        worker.addEventListener('message', handleMessage);
+        
+        // Load model
+        worker.postMessage({ event: 'load', meta: metadata });
+        
+        return () => {
+          worker.removeEventListener('message', handleMessage);
+        };
+      } catch (err) {
+        console.error('Failed to initialize model:', err);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        setLoading(false);
+      }
+    }
+    
+    initModel();
+    
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+      }
+    };
+  }, []);
+  
+  return { meta, ready, loading, error, worker: workerRef.current };
+}
+
+// hooks/usePredict.ts
+import { useEffect, useState, useRef } from 'react';
+import type { ModelMetadata, FeatureData, WorkerOutgoingMessage } from '../types/worker-messages';
+
+interface UsePredictParams {
+  worker: Worker | null;
+  meta: ModelMetadata | null;
+  features: FeatureData | null;
+}
+
+interface UsePredictReturn {
+  prediction: number | null;
+  predicting: boolean;
+  error: string | null;
+}
+
+export function usePredict({ worker, meta, features }: UsePredictParams): UsePredictReturn {
+  const [prediction, setPrediction] = useState<number | null>(null);
+  const [predicting, setPredicting] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!worker || !meta || !features) return;
+
+    // Clear previous timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Debounce predictions for smooth UI
+    debounceRef.current = setTimeout(() => {
+      setPredicting(true);
+      setError(null);
+      
+      // Send prediction request
+      worker.postMessage({ 
+        event: 'predict', 
+        features 
+      });
+    }, 50); // 50ms debounce
+
+    // Cleanup
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [features, worker, meta]);
+
+  useEffect(() => {
+    if (!worker) return;
+
+    const handleMessage = ({ data }: MessageEvent<WorkerOutgoingMessage>) => {
+      if (data.event === 'prediction') {
+        if (data.success) {
+          setPrediction(data.value ?? null);
+          setPredicting(false);
+        } else {
+          setError(data.error || 'Prediction failed');
+          setPredicting(false);
+        }
+      }
+    };
+
+    worker.addEventListener('message', handleMessage);
+
+    return () => {
+      worker.removeEventListener('message', handleMessage);
+    };
+  }, [worker]);
+
+  return { 
+    prediction, 
+    predicting, 
+    error 
+  };
+}
+```
+
+JavaScript version:
+
+```javascript
+// ml-service.js
+export class MLService {
+  constructor() {
+    this.worker = null;
+    this.messageId = 0;
+    this.pendingMessages = new Map();
+    this.modelMetadata = null;
+  }
+
+  async initialize(modelUrl, metadataUrl) {
+    // Create worker
+    this.worker = new Worker(new URL("./ml-worker.js", import.meta.url), {
+      type: "module",
+    });
+
+    // Setup message handler
+    this.worker.addEventListener("message", (event) => {
+      const { type, id, result, error } = event.data;
+      const pending = this.pendingMessages.get(id);
+
+      if (pending) {
+        if (type === "SUCCESS") {
+          pending.resolve(result);
+        } else {
+          pending.reject(new Error(error));
+        }
+        this.pendingMessages.delete(id);
+      }
+    });
+
+    // Load model
+    const loadResult = await this.sendMessage("LOAD_MODEL", {
+      modelUrl,
+      metadataUrl,
+    });
+
+    if (loadResult.success) {
+      this.modelMetadata = loadResult.metadata;
+      return loadResult;
+    } else {
+      throw new Error(loadResult.error);
+    }
+  }
+
+  async predict(inputData) {
+    if (!this.worker) {
+      throw new Error("ML Service not initialized");
+    }
+
+    return this.sendMessage("PREDICT", { inputData });
+  }
+
+  sendMessage(type, payload) {
+    return new Promise((resolve, reject) => {
+      const id = this.messageId++;
+      this.pendingMessages.set(id, { resolve, reject });
+      this.worker.postMessage({ type, id, payload });
+    });
+  }
+
+  dispose() {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    this.pendingMessages.clear();
+  }
+}
+```
+
+### Step 5: React Component Integration
+
+Here's how to create a React component that uses the hooks:
+
+```typescript
+// components/DemoPredictor.tsx
+import { useState, useEffect } from 'react';
+import {
+  Container,
+  Paper,
+  Typography,
+  Slider,
+  Grid,
+  Box,
+  CircularProgress,
+  Alert
+} from '@mui/material';
+import { useModelLoader } from '../hooks/useModelLoader';
+import { usePredict } from '../hooks/usePredict';
+import type { FeatureData } from '../types/worker-messages';
+
+export default function DemoPredictor() {
+  const { meta, ready, loading, error: loadError, worker } = useModelLoader();
+  
+  // Initialize features with default values
+  const [features, setFeatures] = useState<FeatureData | null>(null);
+
+  // Initialize features when metadata is loaded
+  useEffect(() => {
+    if (meta?.feature_ranges) {
+      const initialFeatures: FeatureData = {};
+      Object.entries(meta.feature_ranges).forEach(([name, range]) => {
+        initialFeatures[name] = range.default;
+      });
+      setFeatures(initialFeatures);
+    }
+  }, [meta]);
+
+  const { prediction, predicting, error: predictError } = usePredict({
+    worker,
+    meta,
+    features
+  });
+
+  const handleSliderChange = (featureName: string) => (_: Event, value: number | number[]) => {
+    setFeatures(prev => ({
+      ...prev!,
+      [featureName]: value as number
+    }));
+  };
+
+  if (loading) {
+    return (
+      <Container maxWidth="md">
+        <Paper sx={{ p: 4, mt: 4 }}>
+          <Box display="flex" justifyContent="center" alignItems="center" minHeight={300}>
+            <CircularProgress size={60} />
+          </Box>
+        </Paper>
+      </Container>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Container maxWidth="md">
+        <Paper sx={{ p: 4, mt: 4 }}>
+          <Alert severity="error">
+            Failed to load model: {loadError}
+          </Alert>
+        </Paper>
+      </Container>
+    );
+  }
+
+  if (!ready || !features || !meta) {
+    return null;
+  }
+
+  return (
+    <Container maxWidth="md">
+      <Paper sx={{ p: 4, mt: 4 }}>
+        <Typography variant="h4" gutterBottom>
+          California House Price Prediction
+        </Typography>
+        
+        <Typography variant="body1" color="textSecondary" paragraph>
+          Adjust the sliders below to see real-time predictions using an XGBoost model
+          running entirely in your browser.
+        </Typography>
+
+        <Grid container spacing={3}>
+          {Object.entries(meta.feature_ranges).map(([name, range]) => (
+            <Grid item xs={12} sm={6} key={name}>
+              <Box mb={3}>
+                <Typography gutterBottom>
+                  {name}: <strong>{features[name].toFixed(range.step < 1 ? 1 : 0)}</strong>
+                </Typography>
+                <Slider
+                  value={features[name]}
+                  min={range.min}
+                  max={range.max}
+                  step={range.step}
+                  onChange={handleSliderChange(name)}
+                  valueLabelDisplay="auto"
+                  marks={[
+                    { value: range.min, label: String(range.min) },
+                    { value: range.max, label: String(range.max) }
+                  ]}
+                />
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+
+        {predictError && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            Prediction error: {predictError}
+          </Alert>
+        )}
+
+        <Box mt={4} p={3} bgcolor="primary.main" color="primary.contrastText" borderRadius={1} textAlign="center">
+          <Typography variant="h6">
+            Predicted House Price
+          </Typography>
+          <Typography variant="h3">
+            {predicting ? (
+              <CircularProgress size={40} color="inherit" />
+            ) : prediction !== null ? (
+              `$${(prediction * 100000).toLocaleString('en-US', { 
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0 
+              })}`
+            ) : (
+              '—'
+            )}
+          </Typography>
+          <Typography variant="caption">
+            (Price in hundreds of thousands of dollars)
+          </Typography>
+        </Box>
+
+        <Box mt={3}>
+          <Typography variant="caption" color="textSecondary">
+            Model: {meta.model_info.type} | 
+            R² Score: {meta.model_info.r2_score} | 
+            Training Samples: {meta.model_info.training_samples.toLocaleString()}
+          </Typography>
+        </Box>
+      </Paper>
+    </Container>
+  );
+}
+
+## Framework Integration
+
+### React Integration
+
+```javascript
+// hooks/useMLModel.js
+import { useState, useEffect, useRef } from "react";
+import { MLService } from "../services/ml-service";
+
+export function useMLModel(modelUrl, metadataUrl) {
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [metadata, setMetadata] = useState(null);
+  const mlServiceRef = useRef(null);
+
+  useEffect(() => {
+    const mlService = new MLService();
+    mlServiceRef.current = mlService;
+
+    mlService
+      .initialize(modelUrl, metadataUrl)
+      .then((result) => {
+        setMetadata(result.metadata);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        setError(err);
+        setIsLoading(false);
+      });
+
+    return () => {
+      mlService.dispose();
+    };
+  }, [modelUrl, metadataUrl]);
+
+  const predict = async (inputData) => {
+    if (!mlServiceRef.current) {
+      throw new Error("Model not loaded");
+    }
+    return mlServiceRef.current.predict(inputData);
+  };
+
+  return { isLoading, error, metadata, predict };
+}
+
+// Component usage
+function MLPredictor() {
+  const { isLoading, error, metadata, predict } = useMLModel(
+    "/models/model.onnx",
+    "/models/model-metadata.json"
+  );
+
+  // Your UI logic here
+}
+```
+
+### Vue Integration
+
+```javascript
+// composables/useMLModel.js
+import { ref, onMounted, onUnmounted } from "vue";
+import { MLService } from "../services/ml-service";
+
+export function useMLModel(modelUrl, metadataUrl) {
+  const isLoading = ref(true);
+  const error = ref(null);
+  const metadata = ref(null);
+  let mlService = null;
+
+  onMounted(async () => {
+    mlService = new MLService();
+
+    try {
+      const result = await mlService.initialize(modelUrl, metadataUrl);
+      metadata.value = result.metadata;
+      isLoading.value = false;
+    } catch (err) {
+      error.value = err;
+      isLoading.value = false;
+    }
+  });
+
+  onUnmounted(() => {
+    if (mlService) {
+      mlService.dispose();
+    }
+  });
+
+  const predict = async (inputData) => {
+    if (!mlService) {
+      throw new Error("Model not loaded");
+    }
+    return mlService.predict(inputData);
+  };
+
+  return { isLoading, error, metadata, predict };
+}
+```
+
+### Angular Integration
+
+```typescript
+// services/ml.service.ts
+import { Injectable } from "@angular/core";
+import { BehaviorSubject, Observable } from "rxjs";
+import { MLService } from "./ml-service";
+
+@Injectable({
+  providedIn: "root",
+})
+export class MLModelService {
+  private mlService: MLService;
+  private loadingSubject = new BehaviorSubject<boolean>(true);
+  private metadataSubject = new BehaviorSubject<any>(null);
+
+  loading$ = this.loadingSubject.asObservable();
+  metadata$ = this.metadataSubject.asObservable();
+
+  async initialize(modelUrl: string, metadataUrl: string): Promise<void> {
+    this.mlService = new MLService();
+
+    try {
+      const result = await this.mlService.initialize(modelUrl, metadataUrl);
+      this.metadataSubject.next(result.metadata);
+      this.loadingSubject.next(false);
+    } catch (error) {
+      this.loadingSubject.next(false);
+      throw error;
+    }
+  }
+
+  async predict(inputData: number[]): Promise<number[]> {
+    if (!this.mlService) {
+      throw new Error("Model not loaded");
+    }
+    return this.mlService.predict(inputData);
+  }
+
+  ngOnDestroy(): void {
+    if (this.mlService) {
+      this.mlService.dispose();
+    }
+  }
+}
+```
+
+## Build Tool Configuration
+
+### Vite Configuration (Recommended for TypeScript)
+
+```javascript
+// vite.config.js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 3001,
-  },
-  optimizeDeps: {
-    exclude: ['onnxruntime-web'],
-  },
-  build: {
-    rollupOptions: {
-      output: {
-        format: 'es'
-      }
+    headers: {
+      // Required for SharedArrayBuffer
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
     }
   },
-  assetsInclude: ['**/*.onnx']
+  worker: {
+    format: 'es'
+  },
+  optimizeDeps: {
+    exclude: ['onnxruntime-web']
+  }
 })
 ```
 
-### 3. Create Web Worker
+### TypeScript Configuration
 
-Create `src/workers/predict.worker.js`:
-
-```javascript
-import * as ort from 'onnxruntime-web';
-
-// Configure ONNX Runtime for web
-ort.env.wasm.wasmPaths = '/';
-
-let session = null;
-let inputName = null;
-let outputName = null;
-
-// Handle messages from main thread
-self.addEventListener('message', async (event) => {
-  const { type, payload } = event.data;
-  
-  try {
-    switch (type) {
-      case 'LOAD_MODEL':
-        await loadModel(payload.modelPath, payload.metadata);
-        break;
-        
-      case 'PREDICT':
-        const prediction = await predict(payload.features);
-        self.postMessage({ 
-          type: 'PREDICTION_RESULT', 
-          payload: { prediction } 
-        });
-        break;
-        
-      default:
-        throw new Error(`Unknown message type: ${type}`);
-    }
-  } catch (error) {
-    self.postMessage({ 
-      type: 'ERROR', 
-      payload: { 
-        message: error.message,
-        stack: error.stack 
-      } 
-    });
-  }
-});
-
-async function loadModel(modelPath, metadata) {
-  try {
-    console.log('Loading ONNX model...');
-    
-    // Create inference session
-    session = await ort.InferenceSession.create(modelPath, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all'
-    });
-    
-    // Store tensor names
-    inputName = metadata.inputs.tensorName;
-    outputName = metadata.outputs.tensorName;
-    
-    console.log('Model loaded successfully');
-    self.postMessage({ type: 'MODEL_LOADED' });
-    
-  } catch (error) {
-    console.error('Failed to load model:', error);
-    throw error;
-  }
-}
-
-async function predict(features) {
-  if (!session) {
-    throw new Error('Model not loaded');
-  }
-  
-  try {
-    // Convert features to Float32Array
-    const inputData = new Float32Array(features);
-    
-    // Create input tensor
-    const inputTensor = new ort.Tensor('float32', inputData, [1, features.length]);
-    
-    // Run inference
-    const feeds = { [inputName]: inputTensor };
-    const results = await session.run(feeds);
-    
-    // Extract prediction
-    const output = results[outputName];
-    const prediction = output.data[0];
-    
-    return prediction;
-    
-  } catch (error) {
-    console.error('Prediction failed:', error);
-    throw error;
-  }
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable", "WebWorker"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowJs": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
 }
 ```
 
-### 4. Create Custom Hooks
+### Worker Import Types
 
-Create `src/hooks/useModelLoader.js`:
-
-```javascript
-import { useState, useEffect, useRef } from 'react';
-
-export function useModelLoader() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [metadata, setMetadata] = useState(null);
-  const workerRef = useRef(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function initializeModel() {
-      try {
-        // Fetch model metadata
-        const response = await fetch('/model-package.json');
-        if (!response.ok) {
-          throw new Error('Failed to fetch model metadata');
-        }
-        
-        const modelMetadata = await response.json();
-        
-        if (!mounted) return;
-        
-        setMetadata(modelMetadata);
-        
-        // Create worker
-        const worker = new Worker(
-          new URL('../workers/predict.worker.js', import.meta.url),
-          { type: 'module' }
-        );
-        
-        // Setup message handler
-        worker.addEventListener('message', (event) => {
-          const { type, payload } = event.data;
-          
-          if (type === 'MODEL_LOADED') {
-            if (mounted) {
-              setIsLoading(false);
-            }
-          } else if (type === 'ERROR') {
-            if (mounted) {
-              setError(new Error(payload.message));
-              setIsLoading(false);
-            }
-          }
-        });
-        
-        // Load model in worker
-        worker.postMessage({
-          type: 'LOAD_MODEL',
-          payload: {
-            modelPath: '/model.onnx',
-            metadata: modelMetadata
-          }
-        });
-        
-        workerRef.current = worker;
-        
-      } catch (err) {
-        if (mounted) {
-          setError(err);
-          setIsLoading(false);
-        }
-      }
-    }
-
-    initializeModel();
-
-    return () => {
-      mounted = false;
-      if (workerRef.current) {
-        workerRef.current.terminate();
-      }
-    };
-  }, []);
-
-  return { isLoading, error, metadata, worker: workerRef.current };
-}
-```
-
-Create `src/hooks/usePredict.js`:
-
-```javascript
-import { useState, useEffect, useRef } from 'react';
-
-export function usePredict(worker, features) {
-  const [prediction, setPrediction] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const timeoutRef = useRef(null);
-
-  useEffect(() => {
-    if (!worker || !features) return;
-
-    // Clear previous timeout
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-
-    // Debounce predictions
-    timeoutRef.current = setTimeout(() => {
-      predict();
-    }, 50);
-
-    async function predict() {
-      setIsLoading(true);
-      setError(null);
-
-      const messageHandler = (event) => {
-        const { type, payload } = event.data;
-        
-        if (type === 'PREDICTION_RESULT') {
-          setPrediction(payload.prediction);
-          setIsLoading(false);
-        } else if (type === 'ERROR') {
-          setError(new Error(payload.message));
-          setIsLoading(false);
-        }
-      };
-
-      worker.addEventListener('message', messageHandler);
-
-      // Send prediction request
-      worker.postMessage({
-        type: 'PREDICT',
-        payload: { features }
-      });
-
-      // Cleanup
-      return () => {
-        worker.removeEventListener('message', messageHandler);
-      };
-    }
-
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, [worker, features]);
-
-  return { prediction, isLoading, error };
-}
-```
-
-### 5. Create UI Components
-
-Create `src/components/DemoPredictor.jsx`:
-
-```javascript
-import React, { useState } from 'react';
-import {
-  Box,
-  Card,
-  CardContent,
-  Typography,
-  Slider,
-  Grid,
-  CircularProgress,
-  Alert,
-  Chip
-} from '@mui/material';
-import { useModelLoader } from '../hooks/useModelLoader';
-import { usePredict } from '../hooks/usePredict';
-
-export function DemoPredictor() {
-  const { isLoading: modelLoading, error: modelError, metadata, worker } = useModelLoader();
-  const [features, setFeatures] = useState(null);
-  const { prediction, isLoading: predicting } = usePredict(worker, features);
-
-  // Initialize features when metadata loads
-  React.useEffect(() => {
-    if (metadata && !features) {
-      const initialFeatures = {};
-      metadata.inputs.features.forEach((feature) => {
-        initialFeatures[feature] = metadata.featureStats[feature].mean;
-      });
-      setFeatures(initialFeatures);
-    }
-  }, [metadata, features]);
-
-  if (modelLoading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
-        <Typography variant="body1" sx={{ ml: 2 }}>
-          Loading ML model...
-        </Typography>
-      </Box>
-    );
-  }
-
-  if (modelError) {
-    return (
-      <Alert severity="error" sx={{ m: 2 }}>
-        Failed to load model: {modelError.message}
-      </Alert>
-    );
-  }
-
-  if (!metadata || !features) return null;
-
-  const handleFeatureChange = (featureName, value) => {
-    setFeatures(prev => ({
-      ...prev,
-      [featureName]: value
-    }));
+```typescript
+// types/worker-imports.d.ts
+declare module '*?worker' {
+  const workerConstructor: {
+    new (): Worker;
   };
-
-  const formatFeatureName = (name) => {
-    return name
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  };
-
-  return (
-    <Card sx={{ maxWidth: 800, mx: 'auto', my: 4 }}>
-      <CardContent>
-        <Typography variant="h4" gutterBottom>
-          {metadata.model.name}
-        </Typography>
-        
-        <Box sx={{ mb: 3 }}>
-          <Chip 
-            label={`Model: ${metadata.model.type}`} 
-            size="small" 
-            sx={{ mr: 1 }} 
-          />
-          <Chip 
-            label={`${metadata.model.performance.metric}: ${metadata.model.performance.r2_score.toFixed(3)}`} 
-            size="small" 
-            color="primary" 
-          />
-        </Box>
-
-        <Grid container spacing={3}>
-          {metadata.inputs.features.map((feature) => {
-            const stats = metadata.featureStats[feature];
-            const value = features[feature];
-
-            return (
-              <Grid item xs={12} sm={6} key={feature}>
-                <Typography gutterBottom>
-                  {formatFeatureName(feature)}: {value.toFixed(2)}
-                </Typography>
-                <Slider
-                  value={value}
-                  onChange={(_, newValue) => handleFeatureChange(feature, newValue)}
-                  min={stats.min}
-                  max={stats.max}
-                  step={(stats.max - stats.min) / 100}
-                  valueLabelDisplay="auto"
-                />
-              </Grid>
-            );
-          })}
-        </Grid>
-
-        <Box sx={{ mt: 4, p: 3, bgcolor: 'primary.light', borderRadius: 2 }}>
-          <Typography variant="h5" gutterBottom>
-            Predicted House Price
-          </Typography>
-          {predicting ? (
-            <CircularProgress size={24} />
-          ) : prediction !== null ? (
-            <Typography variant="h3">
-              ${(prediction * 1000).toLocaleString()}
-            </Typography>
-          ) : (
-            <Typography variant="body1" color="text.secondary">
-              Adjust sliders to see prediction
-            </Typography>
-          )}
-        </Box>
-      </CardContent>
-    </Card>
-  );
+  export default workerConstructor;
 }
 ```
 
-### 6. Main App Component
-
-Create `src/App.jsx`:
+### Webpack Configuration
 
 ```javascript
-import React from 'react';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
-import Container from '@mui/material/Container';
-import { DemoPredictor } from './components/DemoPredictor';
-
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: '#1976d2',
+// webpack.config.js
+module.exports = {
+  // ... your existing config
+  module: {
+    rules: [
+      // ... existing rules
+      {
+        test: /\.tsx?$/,
+        use: 'ts-loader',
+        exclude: /node_modules/,
+      },
+      {
+        test: /\.onnx$/,
+        type: "asset/resource",
+        generator: {
+          filename: "models/[name][ext]",
+        },
+      },
+    ],
+  },
+  resolve: {
+    extensions: ['.tsx', '.ts', '.js'],
+    fallback: {
+      path: false,
+      fs: false,
     },
   },
-});
-
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <Container>
-          <h1>Something went wrong.</h1>
-          <pre>{this.state.error?.message}</pre>
-        </Container>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-
-function App() {
-  return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <ErrorBoundary>
-        <Container>
-          <DemoPredictor />
-        </Container>
-      </ErrorBoundary>
-    </ThemeProvider>
-  );
-}
-
-export default App;
+  // Copy WASM files
+  plugins: [
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: "node_modules/onnxruntime-web/dist/*.wasm",
+          to: "[name][ext]",
+        },
+      ],
+    }),
+  ],
+};
 ```
 
-## Integration Steps
+## State Management Integration
 
-### Step-by-Step Implementation
-
-1. **Setup Project Structure**
-   ```
-   your-project/
-   ├── model-dev/
-   │   ├── pyproject.toml
-   │   └── build_model.py
-   └── web/
-       ├── package.json
-       ├── vite.config.js
-       ├── index.html
-       └── src/
-           ├── main.jsx
-           ├── App.jsx
-           ├── components/
-           │   └── DemoPredictor.jsx
-           ├── hooks/
-           │   ├── useModelLoader.js
-           │   └── usePredict.js
-           └── workers/
-               └── predict.worker.js
-   ```
-
-2. **Train and Export Model**
-   ```bash
-   cd model-dev
-   pip install uv  # or use pip/conda
-   uv sync
-   uv run python build_model.py
-   ```
-
-3. **Install Web Dependencies**
-   ```bash
-   cd ../web
-   npm install
-   ```
-
-4. **Run Development Server**
-   ```bash
-   npm run dev
-   ```
-
-### Adapting to Your Model
-
-To use a different model, modify these parts:
-
-1. **Model Training Script**
-   ```python
-   # Replace with your model
-   from sklearn.ensemble import RandomForestClassifier
-   model = RandomForestClassifier()
-   model.fit(X_train, y_train)
-   ```
-
-2. **Update Metadata Generation**
-   ```python
-   metadata = {
-       "model": {
-           "name": "Your Model Name",
-           "type": "random_forest",
-           "task": "classification"  # or "regression"
-       },
-       # Update based on your features
-   }
-   ```
-
-3. **Adjust UI Component**
-   - Update feature sliders based on your model's inputs
-   - Modify prediction display for classification tasks
-
-## Performance Optimization
-
-### 1. Model Optimization
-
-```python
-# Reduce model size
-from sklearn.tree import DecisionTreeRegressor
-
-# Use simpler models for web deployment
-model = DecisionTreeRegressor(max_depth=5)
-
-# Or use feature selection
-from sklearn.feature_selection import SelectKBest
-selector = SelectKBest(k=5)
-X_reduced = selector.fit_transform(X, y)
-```
-
-### 2. Loading Performance
+### Redux Integration
 
 ```javascript
-// Preload model during app initialization
-const modelPreloader = new Worker(
-  new URL('./workers/predict.worker.js', import.meta.url),
-  { type: 'module' }
+// store/mlSlice.js
+import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { MLService } from "../services/ml-service";
+
+const mlService = new MLService();
+
+export const initializeModel = createAsyncThunk(
+  "ml/initialize",
+  async ({ modelUrl, metadataUrl }) => {
+    const result = await mlService.initialize(modelUrl, metadataUrl);
+    return result.metadata;
+  }
 );
 
-// Cache model in IndexedDB for offline use
-async function cacheModel() {
-  const response = await fetch('/model.onnx');
-  const blob = await response.blob();
-  
-  // Store in IndexedDB
-  const db = await openDB('ml-models', 1);
-  await db.put('models', blob, 'cached-model');
-}
+export const predict = createAsyncThunk("ml/predict", async (inputData) => {
+  return await mlService.predict(inputData);
+});
+
+const mlSlice = createSlice({
+  name: "ml",
+  initialState: {
+    isLoading: true,
+    metadata: null,
+    prediction: null,
+    error: null,
+  },
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(initializeModel.pending, (state) => {
+        state.isLoading = true;
+      })
+      .addCase(initializeModel.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.metadata = action.payload;
+      })
+      .addCase(initializeModel.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.error.message;
+      })
+      .addCase(predict.fulfilled, (state, action) => {
+        state.prediction = action.payload;
+      });
+  },
+});
+
+export default mlSlice.reducer;
 ```
 
-### 3. Inference Optimization
+### MobX Integration
 
 ```javascript
-// Batch predictions
-async function batchPredict(featuresList) {
-  const batchSize = featuresList.length;
-  const inputData = new Float32Array(batchSize * numFeatures);
-  
-  // Fill batch tensor
-  featuresList.forEach((features, i) => {
-    inputData.set(features, i * numFeatures);
-  });
-  
-  const inputTensor = new ort.Tensor(
-    'float32', 
-    inputData, 
-    [batchSize, numFeatures]
-  );
-  
-  return session.run({ [inputName]: inputTensor });
-}
-```
+// stores/MLStore.js
+import { makeAutoObservable, runInAction } from "mobx";
+import { MLService } from "../services/ml-service";
 
-## Troubleshooting
+class MLStore {
+  mlService = new MLService();
+  isLoading = true;
+  metadata = null;
+  prediction = null;
+  error = null;
 
-### Common Issues and Solutions
+  constructor() {
+    makeAutoObservable(this);
+  }
 
-1. **CORS Errors**
-   ```javascript
-   // vite.config.js
-   server: {
-     headers: {
-       'Cross-Origin-Embedder-Policy': 'require-corp',
-       'Cross-Origin-Opener-Policy': 'same-origin',
-     }
-   }
-   ```
-
-2. **WebAssembly Not Loading**
-   ```javascript
-   // Explicitly set WASM paths
-   ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-   ```
-
-3. **Model Too Large**
-   ```python
-   # Use quantization
-   from onnxruntime.quantization import quantize_dynamic, QuantType
-   
-   quantize_dynamic(
-       model_input='model.onnx',
-       model_output='model_quant.onnx',
-       weight_type=QuantType.QInt8
-   )
-   ```
-
-4. **Memory Issues**
-   ```javascript
-   // Dispose tensors after use
-   const result = await session.run(feeds);
-   inputTensor.dispose();
-   ```
-
-### Browser Compatibility
-
-```javascript
-// Check for WebAssembly support
-if (typeof WebAssembly === 'undefined') {
-  throw new Error('WebAssembly not supported');
-}
-
-// Feature detection
-const supportsWorkers = typeof Worker !== 'undefined';
-const supportsWASM = (() => {
-  try {
-    if (typeof WebAssembly === 'object' &&
-        typeof WebAssembly.instantiate === 'function') {
-      const module = new WebAssembly.Module(
-        Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00)
-      );
-      return module instanceof WebAssembly.Module;
+  async initialize(modelUrl, metadataUrl) {
+    try {
+      const result = await this.mlService.initialize(modelUrl, metadataUrl);
+      runInAction(() => {
+        this.metadata = result.metadata;
+        this.isLoading = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        this.error = error.message;
+        this.isLoading = false;
+      });
     }
-  } catch (e) {}
-  return false;
-})();
+  }
+
+  async predict(inputData) {
+    const result = await this.mlService.predict(inputData);
+    runInAction(() => {
+      this.prediction = result;
+    });
+  }
+
+  dispose() {
+    this.mlService.dispose();
+  }
+}
+
+export default new MLStore();
 ```
 
-## Deployment
-
-### 1. Build for Production
-
-```bash
-cd web
-npm run build
-```
-
-### 2. Optimize Assets
+### Zustand Integration
 
 ```javascript
-// vite.config.js
-build: {
-  rollupOptions: {
-    output: {
-      manualChunks: {
-        'onnx-runtime': ['onnxruntime-web'],
-        'mui': ['@mui/material'],
-      }
+// stores/useMLStore.js
+import create from "zustand";
+import { MLService } from "../services/ml-service";
+
+const mlService = new MLService();
+
+export const useMLStore = create((set, get) => ({
+  isLoading: true,
+  metadata: null,
+  prediction: null,
+  error: null,
+
+  initialize: async (modelUrl, metadataUrl) => {
+    try {
+      const result = await mlService.initialize(modelUrl, metadataUrl);
+      set({
+        metadata: result.metadata,
+        isLoading: false,
+      });
+    } catch (error) {
+      set({
+        error: error.message,
+        isLoading: false,
+      });
     }
   },
-  // Enable compression
-  minify: 'terser',
-  terserOptions: {
-    compress: {
-      drop_console: true,
+
+  predict: async (inputData) => {
+    const result = await mlService.predict(inputData);
+    set({ prediction: result });
+  },
+
+  cleanup: () => {
+    mlService.dispose();
+  },
+}));
+```
+
+## Testing & CI/CD
+
+### Unit Testing
+
+```javascript
+// __tests__/ml-service.test.js
+import { MLService } from "../ml-service";
+
+// Mock worker
+class MockWorker {
+  constructor() {
+    this.onmessage = null;
+    this.postMessage = jest.fn();
+  }
+
+  addEventListener(event, handler) {
+    if (event === "message") {
+      this.onmessage = handler;
+    }
+  }
+
+  terminate() {}
+}
+
+global.Worker = MockWorker;
+
+describe("MLService", () => {
+  let mlService;
+
+  beforeEach(() => {
+    mlService = new MLService();
+  });
+
+  afterEach(() => {
+    mlService.dispose();
+  });
+
+  test("initializes model successfully", async () => {
+    const promise = mlService.initialize("/model.onnx", "/metadata.json");
+
+    // Simulate successful response
+    mlService.worker.onmessage({
+      data: {
+        type: "SUCCESS",
+        id: 0,
+        result: { success: true, metadata: { test: "data" } },
+      },
+    });
+
+    const result = await promise;
+    expect(result.success).toBe(true);
+    expect(mlService.modelMetadata).toEqual({ test: "data" });
+  });
+});
+```
+
+### Integration Testing
+
+```javascript
+// __tests__/ml-integration.test.js
+import puppeteer from "puppeteer";
+
+describe("ML Integration", () => {
+  let browser;
+  let page;
+
+  beforeAll(async () => {
+    browser = await puppeteer.launch();
+    page = await browser.newPage();
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  test("loads model and makes prediction", async () => {
+    await page.goto("http://localhost:3000");
+
+    // Wait for model to load
+    await page.waitForSelector('[data-testid="model-loaded"]');
+
+    // Input values
+    await page.type('[name="feature1"]', "5.0");
+    await page.type('[name="feature2"]', "3.5");
+
+    // Submit prediction
+    await page.click('[data-testid="predict-button"]');
+
+    // Check result
+    await page.waitForSelector('[data-testid="prediction-result"]');
+    const result = await page.$eval(
+      '[data-testid="prediction-result"]',
+      (el) => el.textContent
+    );
+
+    expect(result).toMatch(/\d+\.\d+/);
+  });
+});
+```
+
+### CI/CD Pipeline
+
+```yaml
+# .github/workflows/ml-pipeline.yml
+name: ML Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  test-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Test model export
+        run: |
+          python scripts/test_model_export.py
+
+      - name: Validate ONNX model
+        run: |
+          python -c "import onnx; onnx.checker.check_model('model.onnx')"
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ml-models
+          path: |
+            model.onnx
+            model-metadata.json
+
+  test-frontend:
+    needs: test-model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: ml-models
+          path: public/models
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build application
+        run: npm run build
+```
+
+## Performance & Optimization
+
+### Model Loading Optimization
+
+```javascript
+// Preload model during idle time
+if ("requestIdleCallback" in window) {
+  requestIdleCallback(() => {
+    mlService.initialize("/models/model.onnx", "/models/metadata.json");
+  });
+}
+
+// Cache model in IndexedDB
+class ModelCache {
+  async saveModel(modelData, metadata) {
+    const db = await this.openDB();
+    const tx = db.transaction(["models"], "readwrite");
+    await tx.objectStore("models").put({
+      id: "primary",
+      modelData,
+      metadata,
+      timestamp: Date.now(),
+    });
+  }
+
+  async loadModel() {
+    const db = await this.openDB();
+    const tx = db.transaction(["models"], "readonly");
+    return await tx.objectStore("models").get("primary");
+  }
+
+  async openDB() {
+    return await openDB("ml-models", 1, {
+      upgrade(db) {
+        db.createObjectStore("models", { keyPath: "id" });
+      },
+    });
+  }
+}
+```
+
+### Inference Optimization
+
+```javascript
+// Batch predictions for efficiency
+class BatchPredictor {
+  constructor(mlService, batchSize = 32, delay = 100) {
+    this.mlService = mlService;
+    this.batchSize = batchSize;
+    this.delay = delay;
+    this.queue = [];
+    this.timer = null;
+  }
+
+  predict(inputData) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ inputData, resolve, reject });
+
+      if (this.queue.length >= this.batchSize) {
+        this.processBatch();
+      } else {
+        this.scheduleBatch();
+      }
+    });
+  }
+
+  scheduleBatch() {
+    if (this.timer) return;
+
+    this.timer = setTimeout(() => {
+      this.processBatch();
+    }, this.delay);
+  }
+
+  async processBatch() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+
+    const batch = this.queue.splice(0, this.batchSize);
+    if (batch.length === 0) return;
+
+    try {
+      // Combine inputs
+      const batchInput = batch.map((item) => item.inputData).flat();
+
+      // Run batch prediction
+      const results = await this.mlService.predictBatch(
+        batchInput,
+        batch.length
+      );
+
+      // Distribute results
+      results.forEach((result, i) => {
+        batch[i].resolve(result);
+      });
+    } catch (error) {
+      batch.forEach((item) => item.reject(error));
     }
   }
 }
 ```
 
-### 3. Deploy to Static Hosting
+### Memory Management
 
-The built app can be deployed to any static hosting service:
+```javascript
+// Dispose tensors properly
+class TensorManager {
+  constructor() {
+    this.tensors = new Set();
+  }
 
-**Netlify**
-```toml
-# netlify.toml
-[build]
-  publish = "web/dist"
+  createTensor(data, dims) {
+    const tensor = new ort.Tensor("float32", data, dims);
+    this.tensors.add(tensor);
+    return tensor;
+  }
 
-[[headers]]
-  for = "/*"
-  [headers.values]
-    Cross-Origin-Embedder-Policy = "require-corp"
-    Cross-Origin-Opener-Policy = "same-origin"
-```
-
-**Vercel**
-```json
-// vercel.json
-{
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Cross-Origin-Embedder-Policy",
-          "value": "require-corp"
-        },
-        {
-          "key": "Cross-Origin-Opener-Policy",
-          "value": "same-origin"
-        }
-      ]
+  async runInference(session, feeds) {
+    try {
+      const results = await session.run(feeds);
+      return results;
+    } finally {
+      // Clean up input tensors
+      for (const tensor of Object.values(feeds)) {
+        tensor.dispose();
+        this.tensors.delete(tensor);
+      }
     }
-  ]
+  }
+
+  dispose() {
+    for (const tensor of this.tensors) {
+      tensor.dispose();
+    }
+    this.tensors.clear();
+  }
 }
 ```
 
-### 4. CDN Configuration
+## Production Considerations
 
-For better performance, serve ONNX Runtime from CDN:
+### Error Handling & Fallbacks
 
-```html
-<!-- index.html -->
-<script type="module">
-  // Preload ONNX Runtime
-  const link = document.createElement('link');
-  link.rel = 'preload';
-  link.as = 'script';
-  link.href = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js';
-  document.head.appendChild(link);
-</script>
+```javascript
+class RobustMLService extends MLService {
+  constructor(options = {}) {
+    super();
+    this.maxRetries = options.maxRetries || 3;
+    this.fallbackUrl = options.fallbackUrl;
+  }
+
+  async initialize(modelUrl, metadataUrl, retryCount = 0) {
+    try {
+      return await super.initialize(modelUrl, metadataUrl);
+    } catch (error) {
+      if (retryCount < this.maxRetries) {
+        console.warn(`Model loading failed, retry ${retryCount + 1}`);
+        return this.initialize(modelUrl, metadataUrl, retryCount + 1);
+      }
+
+      // Fallback to server-side inference
+      if (this.fallbackUrl) {
+        console.warn("Falling back to server-side inference");
+        this.useFallback = true;
+        return {
+          success: true,
+          metadata: await this.fetchMetadata(metadataUrl),
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  async predict(inputData) {
+    if (this.useFallback) {
+      return this.serverPredict(inputData);
+    }
+    return super.predict(inputData);
+  }
+
+  async serverPredict(inputData) {
+    const response = await fetch(this.fallbackUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ features: inputData }),
+    });
+    const data = await response.json();
+    return data.prediction;
+  }
+}
 ```
 
-## Best Practices
+### Monitoring & Analytics
 
-1. **Model Selection**
-   - Use lightweight models (< 100KB ideal)
-   - Prefer tree-based models over deep neural networks
-   - Consider model compression techniques
+```javascript
+class MLMetrics {
+  constructor(analyticsProvider) {
+    this.analytics = analyticsProvider;
+    this.metrics = {
+      loadTime: 0,
+      inferenceCount: 0,
+      totalInferenceTime: 0,
+      errors: [],
+    };
+  }
 
-2. **Error Handling**
-   - Implement comprehensive error boundaries
-   - Provide fallback UI for unsupported browsers
-   - Log errors for monitoring
+  async trackModelLoad(startTime) {
+    this.metrics.loadTime = Date.now() - startTime;
 
-3. **Performance Monitoring**
-   ```javascript
-   // Track inference time
-   const startTime = performance.now();
-   const result = await session.run(feeds);
-   const inferenceTime = performance.now() - startTime;
-   
-   // Send to analytics
-   analytics.track('ml_inference', {
-     model: 'xgboost',
-     time_ms: inferenceTime,
-     input_size: features.length
-   });
-   ```
+    await this.analytics.track("ml_model_loaded", {
+      load_time_ms: this.metrics.loadTime,
+      model_size_kb: await this.getModelSize(),
+      browser: navigator.userAgent,
+    });
+  }
 
-4. **Security Considerations**
-   - Validate all inputs before inference
-   - Implement rate limiting for predictions
-   - Consider model IP protection needs
+  async trackInference(startTime, inputSize, success = true) {
+    const inferenceTime = Date.now() - startTime;
+    this.metrics.inferenceCount++;
+    this.metrics.totalInferenceTime += inferenceTime;
 
-## Conclusion
+    await this.analytics.track("ml_inference", {
+      inference_time_ms: inferenceTime,
+      input_size: inputSize,
+      success,
+      average_time_ms:
+        this.metrics.totalInferenceTime / this.metrics.inferenceCount,
+    });
+  }
 
-This implementation provides a complete framework for running ML models in browsers. Key advantages:
+  trackError(error, context) {
+    this.metrics.errors.push({ error, context, timestamp: Date.now() });
 
-- **No server costs** for inference
-- **Instant predictions** without network latency
-- **Privacy-preserving** as data stays on device
-- **Offline capability** once model is loaded
-- **Scalable** to millions of users
+    this.analytics.track("ml_error", {
+      error_message: error.message,
+      error_stack: error.stack,
+      context,
+    });
+  }
+}
+```
 
-The architecture is flexible and can be adapted for various ML models and use cases, from simple linear regression to complex neural networks, as long as they can be exported to ONNX format.
+### Security Considerations
 
-For production deployments, consider:
-- Model versioning and updates
-- A/B testing different models
-- Performance monitoring
-- Progressive enhancement for older browsers
-- Caching strategies for offline use
+```javascript
+class SecureMLService extends MLService {
+  validateInput(inputData) {
+    // Validate input shape
+    if (
+      !Array.isArray(inputData) ||
+      inputData.length !== this.modelMetadata.inputs.features.length
+    ) {
+      throw new Error("Invalid input shape");
+    }
 
-This approach represents the future of privacy-preserving, scalable ML applications on the web.
+    // Validate input values
+    for (const value of inputData) {
+      if (typeof value !== "number" || !isFinite(value)) {
+        throw new Error("Invalid input value");
+      }
+    }
+
+    // Check for potential attacks (e.g., extremely large values)
+    const MAX_VALUE = 1e6;
+    if (inputData.some((v) => Math.abs(v) > MAX_VALUE)) {
+      throw new Error("Input values out of range");
+    }
+
+    return true;
+  }
+
+  async predict(inputData) {
+    this.validateInput(inputData);
+    return super.predict(inputData);
+  }
+}
+```
+
+### Progressive Enhancement
+
+```javascript
+// Feature detection and graceful degradation
+class MLFeatureDetection {
+  static isSupported() {
+    // Check for required features
+    const hasWebAssembly = typeof WebAssembly !== "undefined";
+    const hasWorker = typeof Worker !== "undefined";
+    const hasFloat32Array = typeof Float32Array !== "undefined";
+
+    return hasWebAssembly && hasWorker && hasFloat32Array;
+  }
+
+  static async checkPerformance() {
+    // Simple performance test
+    const testSize = 1000000;
+    const data = new Float32Array(testSize);
+
+    const start = performance.now();
+    for (let i = 0; i < testSize; i++) {
+      data[i] = Math.random();
+    }
+    const elapsed = performance.now() - start;
+
+    // If basic operations are too slow, fall back
+    return elapsed < 100; // 100ms threshold
+  }
+}
+
+// Usage
+async function initializeMLFeature() {
+  if (!MLFeatureDetection.isSupported()) {
+    console.log("Browser ML not supported, using server fallback");
+    return new ServerMLService();
+  }
+
+  const hasGoodPerformance = await MLFeatureDetection.checkPerformance();
+  if (!hasGoodPerformance) {
+    console.log("Device too slow for client-side ML");
+    return new ServerMLService();
+  }
+
+  return new MLService();
+}
+```
+
+## TypeScript Migration Benefits
+
+When migrating to TypeScript, you gain several advantages:
+
+1. **Type-Safe Message Passing**: The worker communication is now fully typed, preventing runtime errors from mismatched message formats
+2. **Better IDE Support**: Auto-completion and inline documentation for all ML-related functions
+3. **Compile-Time Error Detection**: Catch type mismatches before runtime
+4. **Self-Documenting Code**: Types serve as inline documentation for the expected data structures
+
+## Summary
+
+This guide provides a complete framework for integrating browser-based machine learning into any web application with TypeScript support. The key steps are:
+
+1. **Export your model** to ONNX format with appropriate metadata
+2. **Define TypeScript types** for worker messages and data structures
+3. **Create a typed Web Worker** to handle model loading and inference
+4. **Build React hooks** to manage worker communication and state
+5. **Create React components** that use the hooks for UI
+6. **Configure your build tools** (Vite recommended) for TypeScript and workers
+7. **Add proper error handling** and type validation
+
+The TypeScript implementation provides:
+
+- **Type Safety** - Compile-time checking for all worker communications
+- **Better Developer Experience** - IDE support with auto-completion
+- **Maintainability** - Clear contracts between components
+- **Framework Integration** - Works seamlessly with React and TypeScript
+- **Production Ready** - Includes error handling and proper typing
+- **Performance Optimized** - Uses web workers for non-blocking inference
+
+Remember to:
+- Use strict TypeScript mode for maximum type safety
+- Test thoroughly across different browsers and devices
+- Monitor WebAssembly performance on various hardware
+- Consider fallbacks for browsers that don't support required features
